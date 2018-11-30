@@ -10,8 +10,8 @@ BOARD_LOGGER = logging.getLogger(__name__)
 
 
 # Vendor IDs
-ADAFRUIT_VID = 0x239A # SAMD
-ESP8266_VID = 0x10C4 # Huzzah ESP8266
+ADAFRUIT_VID = 0x239A    # SAMD
+ESP8266_VID  = 0x10C4    # Huzzah ESP8266
 
 # repl commands
 CHAR_CTRL_A = b'\x01'
@@ -29,7 +29,6 @@ MSG_RELOAD = b'Use CTRL-D to reload.'
 class BoardError(Exception):
     """Errors relating to board connections"""
     def __init__(self, msg):
-        # pylint: disable=useless-super-delegation
         super().__init__(msg)
 
 
@@ -41,48 +40,37 @@ class Board:
         self.serial = None
 
     def write(self, msg):
-        """Writes to CircuitPython Board.
-        """
         try:
             self.serial.write(msg)
-        except SerialException as serial_error:
+        except SerialException as s:
             self.connected = False
-            raise BoardError(f"cannot write to board: {serial_error}")
+            raise BoardError(f"cannot write to board: {s}")
 
 
     def read_until(self, msg):
-        """Reads board until end of `msg`.
-        """
         try:
             return self.serial.read_until(msg)
-        except SerialException as serial_error:
+        except SerialException as s:
             self.connected = False
-            raise BoardError(f"cannot read from board: {serial_error}")
+            raise BoardError(f"cannot read from board: {s}")
 
 
     def read_all(self):
-        """Attempts to read all incoming msgs from board.
-        """
         try:
             return self.serial.read_all()
-        except SerialException as serial_error:
+        except SerialException as s:
             self.connected = False
-            raise BoardError(f"cannot read from board: {serial_error}")
+            raise BoardError(f"cannot read from board: {s}")
 
     def close(self):
-        """Close serial connection with board.
-        """
         if self.serial and self.connected:
             try:
                 self.connected = False
                 self.serial.close()
-            except SerialException:
+            except:
                 pass
 
     def softreset(self):
-        """Resets the circuitpython board (^D)
-        from a jupyter cell.
-        """
         serial = self.serial
         # in case the VM is in a weird state ...
         self.enter_raw_repl()
@@ -97,8 +85,6 @@ class Board:
         BOARD_LOGGER.debug("* soft reset complete, in raw repl")
 
     def enter_raw_repl(self):
-        """Enters the RAW circuitpython repl.
-        """
         BOARD_LOGGER.debug('* enter raw repl ...')
         serial = self.serial
         serial.write(CHAR_CTRL_C)
@@ -109,11 +95,8 @@ class Board:
         BOARD_LOGGER.debug('* entered raw repl, returning to kernel...')
 
     def connect(self):
-        """(re)connect to board and enter raw repl
-        """
-        if self.connected:
-            return
-        # pylint : disable=too-many-function-args
+        """(re)connect to board and enter raw repl"""
+        if self.connected: return
         device = self._find_board()
         try:
             BOARD_LOGGER.debug(f'connect: open {device}')
@@ -126,8 +109,8 @@ class Board:
                 BOARD_LOGGER.debug('* opening board ...')
                 self.serial.open()
                 BOARD_LOGGER.debug('* board opened')
-            except SerialException as serial_error:
-                raise BoardError(f"failed to open {device}, {serial_error}")
+            except SerialException as s:
+                raise BoardError(f"failed to open {device}")
         else:
             BOARD_LOGGER.debug('serial already open')
 
@@ -138,7 +121,6 @@ class Board:
         except:
             raise BoardError(f"failed to enter raw repl with {device}")
 
-
     def _find_board(self):
         """Find serial port where an Adafruit board is connected"""
         for port in comports():
@@ -146,6 +128,5 @@ class Board:
             BOARD_LOGGER.debug(port.device)
             if port.vid == ADAFRUIT_VID or port.vid == ESP8266_VID:
                 BOARD_LOGGER.debug(f"CircuitPython Board Found at: {port.device}")
-                BOARD_LOGGER.debug(f"Connected? {self.connected}")
                 return port.device
         raise BoardError("found no board")

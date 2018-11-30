@@ -5,8 +5,8 @@ import logging
 import re
 import time
 
-from ipykernel.kernelbase import Kernel
 from serial.serialutil import SerialException
+from ipykernel.kernelbase import Kernel
 from .board import Board, BoardError
 from .version import __version__
 
@@ -49,22 +49,24 @@ class CircuitPyKernel(Kernel):
             self.board.softreset()
         elif line.startswith("%upload_delay"):
             try:
-                s_line = line.split(' ')
-                self.upload_delay = float(s_line[1])
-                KERNEL_LOGGER.debug(f"upload_delay set to {float(s_line[1])} s")
-            except TypeError:
+                s = line.split(' ')
+                self.upload_delay = float(s[1])
+                KERNEL_LOGGER.debug(f"upload_delay set to {float(s[1])} s")
+            except:
                 pass
         else:
             return False
         return True
 
-    def run_code(self, code):
+    def run_code(self, code, silent=True):
         """Run a code snippet.
 
         Parameters
         ----------
         code : str
             Code to be executed.
+        silent : bool
+            Controls output to notebook.
 
         Returns
         -------
@@ -72,7 +74,6 @@ class CircuitPyKernel(Kernel):
             Decoded bytearray output result from code run.
         err
             Decoded bytearray error from code run.
-
         """
         # make sure we are connected to the board
         self.board.connect()
@@ -86,19 +87,35 @@ class CircuitPyKernel(Kernel):
         # Kick off evaluation ...
         self.board.write(b'\r\x04')   # Control-D
         # Set up a bytearray to hold the result from the code run
-        result = bytearray()
-        while not result.endswith(b'\x04>'):  # Control-D
+        retval = bytearray()
+        # response starts with OK
+        self.board.read_until(b'OK')  # swallow response head
+        while True:
+            result = self.board.read_all()
+            if b'\x04' in result:
+                # \x04 marks error if any, wait for rest of message
+                while not result.endswith(b'\x04>'):
+                    result.extend(self.board.read_all())
+                    time.sleep(0.1)
+                result = result[0:-2]
+                retval.extend(result)
+                out, err = result.split(b'\x04', 1)
+                self.send_stdout(out.decode('utf-8', 'replace'), silent)
+                self.send_stderr(err.decode('utf-8', 'replace'), silent)
+                break
+            # show result received so far ...
+            retval.extend(result)
+            self.send_stdout(result.decode('utf-8', 'replace'), silent)
             time.sleep(0.1)
-            result.extend(self.board.read_all())
-        KERNEL_LOGGER.debug('received: %s', result.decode('utf-8', 'replace'))
 
-        assert result.startswith(b'OK')
-        out, err = result[2:-2].split(b'\x04', 1)  # split result
-
+        # send result back to caller (for _eval)
+        out, err = retval.split(b'\x04', 1)  # split return value
+        KERNEL_LOGGER.debug('Output: "%s"', out.decode('utf-8', 'replace'))
+        KERNEL_LOGGER.debug('Error:  "%s"', err.decode('utf-8', 'replace'))
         return out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
 
     def do_execute(self, code, silent, store_history=True,
-                                  user_expressions=None, allow_stdin=False):
+                   user_expressions=None, allow_stdin=False):
         """Execute a user's code cell.
 
         Parameters
@@ -131,31 +148,31 @@ class CircuitPyKernel(Kernel):
         # evaluate code on board
         out = err = None
         try:
-            out, err = self.run_code(code)
-        except (BoardError, SerialException) as ser_eror:
-            KERNEL_LOGGER.debug(f'no connection {ser_eror}')
-            err = f"No connection to CiruitPython VM: {ser_eror}"
+            self.run_code(code, silent)
+        except (BoardError, SerialException) as e:
+            KERNEL_LOGGER.debug(f'no connection {e}')
+            self.send_stderr(f"No connection to CiruitPython VM: {e}")
         except KeyboardInterrupt:
             KERNEL_LOGGER.debug(f'keyboard interrupt')
-            err = "Keyboard Interrupt"
-        if out:
-            KERNEL_LOGGER.debug(f"Output: '{out}'")
-        if err:
-            KERNEL_LOGGER.debug(f"Error:  '{err}'")
-        if not silent:
-            out_content = {'name': 'stdout', 'text': out}
-            err_content = {'name': 'stderr', 'text': err}
-            if out:
-                self.send_response(self.iopub_socket, 'stream', out_content)
-            if err:
-                self.send_response(self.iopub_socket, 'stream', err_content)
-
+            self.send_stderr("Keyboard Interrupt")
         return {
             'status': 'ok',
             'execution_count': self.execution_count,
             'payload': [],
             'user_expressions': {},
         }
+
+    def send_stdout(self, msg, silent=False):
+        """Send msg to stdout stream (display in notebook)."""
+        if silent or not msg: return
+        content = {'name': 'stdout', 'text': msg}
+        self.send_response(self.iopub_socket, 'stream', content)
+
+    def send_stderr(self, msg, silent=False):
+        """Send msg to stderr stream (display in notebook)."""
+        if silent or not msg: return
+        content = {'name': 'stderr', 'text': msg}
+        self.send_response(self.iopub_socket, 'stream', content)
 
     def _eval(self, expr):
         """Evaluate the expression.
@@ -165,10 +182,11 @@ class CircuitPyKernel(Kernel):
         """
         try:
             out, err = self.run_code('print({})'.format(expr))
-        except (BoardError, SerialException) as ser_eror:
-            out = err = f"Lost connection to CiruitPython VM: {ser_eror}"
+        except (BoardError, SerialException) as e:
+            out = ""
+            err = f"Lost connection to CiruitPython VM: {e}"
         KERNEL_LOGGER.debug('Output: %s', out)
-        KERNEL_LOGGER.debug('Error %s', err)
+        KERNEL_LOGGER.debug('Error:  %s', err)
         return ast.literal_eval(out)
 
     def do_shutdown(self, restart):
